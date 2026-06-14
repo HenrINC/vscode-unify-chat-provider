@@ -79,6 +79,7 @@ export interface OpenAICodexIdTokenClaims {
   chatgpt_account_id?: string;
   organizations?: Array<{ id: string }>;
   email?: string;
+  exp?: unknown;
   'https://api.openai.com/auth'?: {
     chatgpt_account_id?: string;
   };
@@ -153,6 +154,15 @@ function extractEmail(tokens: { idToken?: string; accessToken?: string }): strin
   return undefined;
 }
 
+function resolveExpiresAt(accessToken: string, expiresIn: unknown): number | undefined {
+  if (typeof expiresIn === 'number') {
+    return Date.now() + expiresIn * 1000;
+  }
+
+  const claims = parseJwtClaims(accessToken);
+  return typeof claims?.exp === 'number' ? claims.exp * 1000 : undefined;
+}
+
 export type OpenAICodexTokenExchangeResult =
   | {
       type: 'success';
@@ -223,10 +233,7 @@ export async function exchangeOpenAICodexCode(options: {
   const tokenType =
     tokenTypeRaw.toLowerCase() === 'bearer' ? 'Bearer' : tokenTypeRaw || 'Bearer';
 
-  const expiresAt =
-    typeof tokenPayload.expires_in === 'number'
-      ? Date.now() + tokenPayload.expires_in * 1000
-      : undefined;
+  const expiresAt = resolveExpiresAt(accessToken, tokenPayload.expires_in);
 
   const accountId = extractAccountId({ idToken, accessToken });
   const email = extractEmail({ idToken, accessToken });
@@ -306,10 +313,7 @@ export async function refreshOpenAICodexToken(options: {
   const tokenType =
     tokenTypeRaw.toLowerCase() === 'bearer' ? 'Bearer' : tokenTypeRaw || 'Bearer';
 
-  const expiresAt =
-    typeof tokenPayload.expires_in === 'number'
-      ? Date.now() + tokenPayload.expires_in * 1000
-      : undefined;
+  const expiresAt = resolveExpiresAt(accessToken, tokenPayload.expires_in);
 
   const accountId = extractAccountId({ idToken, accessToken });
   const email = extractEmail({ idToken, accessToken });
