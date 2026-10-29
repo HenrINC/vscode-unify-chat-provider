@@ -181,7 +181,7 @@ describe('Codex model discovery', () => {
     expect(models).toEqual([
       {
         id: 'gpt-6.1-sol',
-        name: 'GPT-6.1-Sol',
+        name: 'GPT-6.1 Sol',
         maxInputTokens: 500000,
         maxOutputTokens: undefined,
         thinking: { type: 'enabled', effort: 'xhigh', summary: 'auto' },
@@ -212,6 +212,21 @@ describe('Codex model discovery', () => {
         type: 'normal',
       }),
     );
+  });
+
+  it.each([
+    ['gpt-6-astra', ' GPT-6-Astra ', 'GPT-6 Astra'],
+    ['gpt-6.1-terra', 'GPT-6.1 Terra', 'GPT-6.1 Terra'],
+    ['gpt-5.5', 'GPT-5.5', 'GPT-5.5'],
+    ['other-model', 'Other-Model', 'Other-Model'],
+  ])('formats %s without changing its API ID', async (id, name, expectedName) => {
+    mockDiscoveryResponse({
+      models: [{ ...catalogModel, slug: id, display_name: name }],
+    });
+    const [model] = await new OpenAICodexProvider(config).getAvailableModels(
+      credential,
+    );
+    expect(model).toMatchObject({ id, name: expectedName });
   });
 
   it('uses a supported default effort when xhigh is unavailable', async () => {

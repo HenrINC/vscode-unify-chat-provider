@@ -134,7 +134,9 @@ function parseCodexModels(raw: unknown): ModelConfig[] {
         : levels[0];
     models.push({
       id: item['slug'].trim(),
-      ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {}),
+      ...(typeof name === 'string' && name.trim()
+        ? { name: name.trim().replace(/^(GPT-\d+(?:\.\d+)?)-/i, '$1 ') }
+        : {}),
       ...(typeof contextWindow === 'number' &&
       Number.isSafeInteger(contextWindow) && contextWindow > 0
         ? { maxInputTokens: contextWindow }
