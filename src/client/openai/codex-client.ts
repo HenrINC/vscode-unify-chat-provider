@@ -18,6 +18,7 @@ import {
 } from './responses-client';
 import { randomUUID } from 'crypto';
 import { codexBaseInstructionsForModel } from './codex-instructions';
+import { reasoningEffort, verbosity } from '../../well-known/preset-templates';
 
 const CODEX_API_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
 const CODEX_LATEST_RELEASE_URL =
@@ -41,14 +42,6 @@ const CODEX_COMMON_REQUEST_FIELDS_TO_DELETE = [
   'frequency_penalty',
   'presence_penalty',
 ] as const;
-const CODEX_REASONING_SUMMARY_DEFAULTS = {
-  maxOutputTokens: undefined,
-  thinking: {
-    type: 'enabled',
-    effort: 'xhigh',
-    summary: 'auto',
-  },
-} satisfies Pick<ModelConfig, 'maxOutputTokens' | 'thinking'>;
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -127,11 +120,15 @@ function parseCodexModels(raw: unknown): ModelConfig[] {
           .filter(isThinkingEffort)
       : [];
     const defaultEffort = item['default_reasoning_level'];
-    const effort = levels.includes('xhigh')
-      ? 'xhigh'
-      : isThinkingEffort(defaultEffort) && levels.includes(defaultEffort)
-        ? defaultEffort
-        : levels[0];
+    const effort = isThinkingEffort(defaultEffort) && levels.includes(defaultEffort)
+      ? defaultEffort
+      : levels[0];
+    const summary = item['default_reasoning_summary'];
+    const defaultVerbosity = item['default_verbosity'];
+    const presetTemplates = [
+      ...(levels.length ? [reasoningEffort({ supported: levels, default: effort })] : []),
+      ...(item['support_verbosity'] === true ? [verbosity()] : []),
+    ];
     models.push({
       id: item['slug'].trim(),
       ...(typeof name === 'string' && name.trim()
@@ -141,19 +138,32 @@ function parseCodexModels(raw: unknown): ModelConfig[] {
       Number.isSafeInteger(contextWindow) && contextWindow > 0
         ? { maxInputTokens: contextWindow }
         : {}),
-      ...CODEX_REASONING_SUMMARY_DEFAULTS,
+      maxOutputTokens: undefined,
       thinking: {
-        type: 'enabled',
+        type: effort === 'none' ? 'disabled' : 'enabled',
         effort,
         summary:
-          item['supports_reasoning_summaries'] === false ? undefined : 'auto',
+          item['supports_reasoning_summaries'] === false ||
+          item['supports_reasoning_summary_parameter'] === false
+            ? undefined
+            : summary === 'none' || summary === 'auto' ||
+              summary === 'concise' || summary === 'detailed'
+              ? summary : 'auto',
       },
       capabilities: {
         toolCalling: true,
         imageInput:
           Array.isArray(item['input_modalities']) &&
           item['input_modalities'].includes('image'),
+        ...(item['apply_patch_tool_type'] === 'freeform'
+          ? { editTools: 'apply-patch' } : {}),
       },
+      ...(typeof item['supports_parallel_tool_calls'] === 'boolean'
+        ? { parallelToolCalling: item['supports_parallel_tool_calls'] } : {}),
+      ...(item['support_verbosity'] === true &&
+        (defaultVerbosity === 'low' || defaultVerbosity === 'medium' || defaultVerbosity === 'high')
+        ? { verbosity: defaultVerbosity } : {}),
+      ...(presetTemplates.length ? { presetTemplates } : {}),
     });
   }
   return models;
@@ -359,6 +369,22 @@ function readStringHeader(
  * - OAuth account identity headers only for openai-codex auth
  */
 export class OpenAICodexProvider extends OpenAIResponsesProvider {
+  protected override normalizeReasoningEffortForOpenAi(
+    model: ModelConfig,
+  ): ThinkingEffort {
+    if (
+      this.config.auth?.method === 'openai-codex' &&
+      model.thinking?.effort === 'max' &&
+      model.presetTemplates?.some(template =>
+        template.id === 'reasoningEffort' &&
+        template.presets.some(preset => preset.config.thinking?.effort === 'max'),
+      )
+    ) {
+      return 'max';
+    }
+    return super.normalizeReasoningEffortForOpenAi(model);
+  }
+
   protected override shouldEnableResponsesContextManagement(
     model: ModelConfig,
   ): boolean {

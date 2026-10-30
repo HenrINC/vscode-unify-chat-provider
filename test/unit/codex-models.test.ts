@@ -9,7 +9,10 @@ const state = vi.hoisted(() => ({
   getAvailableModels: vi.fn<(...args: unknown[]) => Promise<ModelConfig[]>>(),
 }));
 
-vi.mock('vscode', () => ({}));
+vi.mock('vscode', () => ({
+  env: { language: 'en' },
+  l10n: { t: (message: string) => message },
+}));
 vi.mock('../../src/logger', () => ({
   createSimpleHttpLogger: () => ({ error: state.error }),
 }));
@@ -69,7 +72,16 @@ const catalogModel = {
   max_context_window: 872000,
   input_modalities: ['text', 'image'],
   default_reasoning_level: 'medium',
-  supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'xhigh' }],
+  supported_reasoning_levels: [
+    { effort: 'medium' }, { effort: 'xhigh' }, { effort: 'max' }, { effort: 'ultra' },
+  ],
+  default_reasoning_summary: 'auto',
+  supports_reasoning_summaries: true,
+  supports_reasoning_summary_parameter: true,
+  apply_patch_tool_type: 'freeform',
+  supports_parallel_tool_calls: true,
+  support_verbosity: true,
+  default_verbosity: 'low',
 };
 
 function mockDiscoveryResponse(body: unknown, version = '1.2.3'): void {
@@ -178,14 +190,18 @@ describe('Codex model discovery', () => {
       controller.signal,
     );
 
-    expect(models).toEqual([
+    expect(models).toMatchObject([
       {
         id: 'gpt-6.1-sol',
         name: 'GPT-6.1 Sol',
         maxInputTokens: 500000,
         maxOutputTokens: undefined,
-        thinking: { type: 'enabled', effort: 'xhigh', summary: 'auto' },
-        capabilities: { toolCalling: true, imageInput: true },
+        thinking: { type: 'enabled', effort: 'medium', summary: 'auto' },
+        capabilities: {
+          toolCalling: true, imageInput: true, editTools: 'apply-patch',
+        },
+        parallelToolCalling: true,
+        verbosity: 'low',
       },
     ]);
     expect(state.fetch).toHaveBeenNthCalledWith(
@@ -212,6 +228,57 @@ describe('Codex model discovery', () => {
         type: 'normal',
       }),
     );
+  });
+
+  it('builds reasoning and verbosity presets from supported metadata', async () => {
+    mockDiscoveryResponse({ models: [catalogModel] });
+    const [model] = await new OpenAICodexProvider(config).getAvailableModels(credential);
+    const reasoning = model?.presetTemplates?.find(template => template.id === 'reasoningEffort');
+    expect(reasoning?.presets.map(preset => preset.id)).toEqual(['max', 'xhigh', 'medium']);
+    expect(reasoning?.default).toBe('medium');
+    expect(model?.presetTemplates?.find(template => template.id === 'verbosity'))
+      .toMatchObject({ default: 'default' });
+  });
+
+  it('preserves false capabilities and omits unsupported settings', async () => {
+    mockDiscoveryResponse({ models: [{
+      ...catalogModel,
+      supports_parallel_tool_calls: false,
+      support_verbosity: false,
+      apply_patch_tool_type: 'unknown',
+      supports_reasoning_summary_parameter: false,
+    }] });
+    const [model] = await new OpenAICodexProvider(config).getAvailableModels(credential);
+    expect(model?.parallelToolCalling).toBe(false);
+    expect(model?.verbosity).toBeUndefined();
+    expect(model?.capabilities?.editTools).toBeUndefined();
+    expect(model?.thinking?.summary).toBeUndefined();
+    expect(model?.presetTemplates?.some(template => template.id === 'verbosity')).toBe(false);
+  });
+
+  it('ignores invalid optional capability values', async () => {
+    mockDiscoveryResponse({ models: [{
+      ...catalogModel,
+      supports_parallel_tool_calls: 'true',
+      support_verbosity: 'true',
+      apply_patch_tool_type: null,
+      default_verbosity: 'invalid',
+    }] });
+    const [model] = await new OpenAICodexProvider(config).getAvailableModels(credential);
+    expect(model?.parallelToolCalling).toBeUndefined();
+    expect(model?.verbosity).toBeUndefined();
+    expect(model?.capabilities?.editTools).toBeUndefined();
+  });
+
+  it('supports an advertised non-thinking default and explicit summary default', async () => {
+    mockDiscoveryResponse({ models: [{
+      ...catalogModel,
+      default_reasoning_level: 'none',
+      supported_reasoning_levels: [{ effort: 'none' }, { effort: 'low' }],
+      default_reasoning_summary: 'concise',
+    }] });
+    const [model] = await new OpenAICodexProvider(config).getAvailableModels(credential);
+    expect(model?.thinking).toEqual({ type: 'disabled', effort: 'none', summary: 'concise' });
   });
 
   it.each([
@@ -265,6 +332,11 @@ describe('Codex model discovery', () => {
     expect(model?.id).toBe('future-model');
     expect(model?.thinking?.effort).toBeUndefined();
     expect(model?.maxInputTokens).toBeUndefined();
+    expect(model?.maxOutputTokens).toBeUndefined();
+    expect(model?.tokenizer).toBeUndefined();
+    expect(model?.parallelToolCalling).toBeUndefined();
+    expect(model?.verbosity).toBeUndefined();
+    expect(model?.presetTemplates).toBeUndefined();
   });
 
   it('delegates API-key configurations without contacting ChatGPT', async () => {
